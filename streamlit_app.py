@@ -1,4 +1,16 @@
 import streamlit as st
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+
+if not st.session_state.auth:
+    pw = st.text_input("Enter app password:", type="password")
+    if pw == st.secrets["APP_PASSWORD"]:
+        st.session_state.auth = True
+        st.experimental_rerun()
+    else:
+        st.stop()
+
+import streamlit as st
 import os
 from datetime import datetime
 
