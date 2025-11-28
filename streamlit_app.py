@@ -1,18 +1,4 @@
-import streamlit as st
 
-# --- Simple password gate ---
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    password = st.text_input("Enter app password:", type="password")
-    if password:
-        if password == st.secrets["APP_PASSWORD"]:
-            st.session_state.authenticated = True
-            st.experimental_rerun()
-        else:
-            st.error("Incorrect password")
-    st.stop()
 
 
 import streamlit as st
