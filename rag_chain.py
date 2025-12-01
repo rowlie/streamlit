@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""RAG Chain with Tools - Streamlit-ready (LCEL + Tools + Memory)"""
+"""RAG Chain with Tools - Streamlit-ready (LCEL + StructuredTool + Memory)"""
 
 import os
 import json
@@ -12,9 +12,9 @@ from pinecone import Pinecone
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
-from langchain_core.tools import tool
 from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnableMap, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.tools.structured import StructuredTool
 
 # ChatMessageHistory from langchain-community for Streamlit memory
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -56,9 +56,8 @@ def get_retriever():
     return model
 
 # ============================================================================
-# TOOLS (explicit keyword args)
+# TOOLS AS REGULAR FUNCTIONS
 # ============================================================================
-@tool
 def calculator(expression: str) -> str:
     try:
         result = eval(expression)
@@ -66,15 +65,12 @@ def calculator(expression: str) -> str:
     except Exception as e:
         return f"Error: {e}"
 
-@tool
 def get_current_time() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-@tool
 def word_count(text: str) -> str:
     return f"Word count: {len(text.split())}"
 
-@tool
 def convert_case(text: str, case_type: str) -> str:
     case_type = case_type.lower()
     if case_type == "upper":
@@ -85,7 +81,6 @@ def convert_case(text: str, case_type: str) -> str:
         return text.title()
     return f"Error: Unknown case_type '{case_type}'. Use upper/lower/title."
 
-@tool
 def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> str:
     factors = {"sedentary": 28, "light": 31, "moderate": 34, "active": 37}
     maintenance = weight_kg * factors.get(activity.lower(), 31)
@@ -109,7 +104,42 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
         f"- Protein: {protein_low:.1f}-{protein_high:.1f} g/day"
     )
 
-tools = [calculator, get_current_time, word_count, convert_case, estimate_targets]
+# ============================================================================
+# STRUCTURED TOOLS
+# ============================================================================
+calculator_tool = StructuredTool.from_function(
+    func=calculator,
+    name="calculator",
+    description="Evaluate a math expression, e.g. '2 + 2 * 5'."
+)
+get_current_time_tool = StructuredTool.from_function(
+    func=get_current_time,
+    name="get_current_time",
+    description="Get the current date and time in YYYY-MM-DD HH:MM:SS format."
+)
+word_count_tool = StructuredTool.from_function(
+    func=word_count,
+    name="word_count",
+    description="Count the number of words in a given text."
+)
+convert_case_tool = StructuredTool.from_function(
+    func=convert_case,
+    name="convert_case",
+    description="Convert text to upper, lower, or title case."
+)
+estimate_targets_tool = StructuredTool.from_function(
+    func=estimate_targets,
+    name="estimate_targets",
+    description="Estimate daily calories and protein based on weight, sex, activity, and goal."
+)
+
+tools = [
+    calculator_tool,
+    get_current_time_tool,
+    word_count_tool,
+    convert_case_tool,
+    estimate_targets_tool
+]
 
 # ============================================================================
 # PINECONE RAG RETRIEVAL
