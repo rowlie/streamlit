@@ -17,7 +17,7 @@ from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnableMap
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
 # ✅ Correct memory import for LangChain >=0.3.1
-from langchain.memory.buffer import ConversationBufferMemory
+from langchain.memory import ConversationBufferMemory
 
 # =============================
 # Configuration
