@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""RAG Chain with Tools - Streamlit-ready, updated for latest LangChain"""
+"""RAG Chain with Tools - Fully compatible with LangChain >=0.3.1"""
 
 import os
 import json
@@ -16,19 +16,18 @@ from langchain_core.tools import tool
 from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnableMap, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
-# ✅ Updated memory import
-from langchain.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferMemory  # ✅ Updated memory
 
-# ============================================================================
-# CONFIG
-# ============================================================================
+# =============================
+# Config
+# =============================
 INDEX_NAME = "youtube-qa-index"
 TOP_K = 5
 SESSION_ID_KEY = "langchain_session"
 
-# ============================================================================
-# GLOBALS
-# ============================================================================
+# =============================
+# Globals
+# =============================
 _initialized = False
 retriever = None
 pc = None
@@ -38,26 +37,26 @@ llm_with_tools = None
 rag_agent_chain_with_history = None
 tools = []
 
-# ============================================================================
-# ENVIRONMENT
-# ============================================================================
+# =============================
+# Environment Setup
+# =============================
 def _setup_env():
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
     os.environ.setdefault("LANGCHAIN_PROJECT", "memory-and-tools-rag-agent-v3")
 
-# ============================================================================
-# RETRIEVER
-# ============================================================================
+# =============================
+# Retriever
+# =============================
 @st.cache_resource
 def get_retriever():
     import torch
     model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device="cpu")
     return model
 
-# ============================================================================
-# TOOLS
-# ============================================================================
+# =============================
+# Tools
+# =============================
 @tool
 def calculator(expression: str) -> str:
     try:
@@ -97,9 +96,9 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
 
 tools = [calculator, get_current_time, word_count, convert_case, estimate_targets]
 
-# ============================================================================
-# PINECONE RETRIEVAL
-# ============================================================================
+# =============================
+# Pinecone Retrieval
+# =============================
 def retrieve_pinecone_context(query: str, top_k: int = TOP_K) -> Dict:
     if retriever is None or index is None:
         return {"matches": []}
@@ -119,9 +118,9 @@ def context_string_from_matches(matches: List) -> str:
             parts.append(text)
     return "\n\n".join(parts)
 
-# ============================================================================
-# TOOL EXECUTION
-# ============================================================================
+# =============================
+# Tool Execution
+# =============================
 def _tool_executor(call: dict) -> ToolMessage:
     name = call.get("name") or call.get("function", {}).get("name")
     raw_args = call.get("args") or call.get("function", {}).get("arguments", {})
@@ -143,9 +142,9 @@ def _tool_executor(call: dict) -> ToolMessage:
             result = f"Tool error: {e}"
     return ToolMessage(content=str(result), tool_call_id=tool_id)
 
-# ============================================================================
-# PROMPT BUILDER
-# ============================================================================
+# =============================
+# Prompt Builder
+# =============================
 def _build_full_prompt_messages(inputs: dict) -> dict:
     user_msg = inputs["user_message"]
     history = inputs.get("chat_history", [])
@@ -166,18 +165,16 @@ def _build_full_prompt_messages(inputs: dict) -> dict:
             )
         )
     ]
-
     msgs.extend(history)
     msgs.append(HumanMessage(content=user_msg))
-
     if context:
         msgs.append(HumanMessage(content=f"📚 Context:\n{context}"))
 
     return {"messages": msgs, "rag_context": context, "original_user_message": user_msg}
 
-# ============================================================================
-# MEMORY
-# ============================================================================
+# =============================
+# Memory
+# =============================
 def _get_session_history(session_id: str):
     key = f"{SESSION_ID_KEY}_{session_id}"
     if key not in st.session_state:
@@ -189,9 +186,9 @@ def _get_session_history(session_id: str):
         )
     return st.session_state[key]
 
-# ============================================================================
-# INITIALIZATION
-# ============================================================================
+# =============================
+# Initialization
+# =============================
 def initialize_chain():
     global _initialized, retriever, pc, index, llm, llm_with_tools, rag_agent_chain_with_history
     if _initialized:
@@ -237,14 +234,17 @@ def initialize_chain():
 
     _initialized = True
 
-# ============================================================================
-# MAIN CHAT
-# ============================================================================
+# =============================
+# Main Chat
+# =============================
 def chat_with_rag_and_tools(user_message: str) -> str:
     if not _initialized:
         raise RuntimeError("Chain not initialized.")
     try:
-        result = rag_agent_chain_with_history.invoke({"user_message": user_message}, config={"configurable": {"session_id": "streamlit_user"}})
+        result = rag_agent_chain_with_history.invoke(
+            {"user_message": user_message},
+            config={"configurable": {"session_id": "streamlit_user"}}
+        )
         return result["final_response"].content
     except Exception as e:
         print(f"❌ Chat error: {e}")
