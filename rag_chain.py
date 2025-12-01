@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""RAG Chain with Tools - Fully working for Streamlit (LCEL + StructuredTool + Memory)"""
+"""Fully working RAG + Tools + Memory LCEL chain for Streamlit"""
 
 import os
 import json
@@ -15,8 +15,6 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnableMap, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools.structured import StructuredTool
-
-from langchain_community.chat_message_histories import ChatMessageHistory
 
 # ============================================================================
 # CONFIG
@@ -38,7 +36,7 @@ llm_with_tools = None
 rag_agent_chain_with_history = None
 
 # ============================================================================
-# ENVIRONMENT
+# ENVIRONMENT SETUP
 # ============================================================================
 def _setup_env():
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
@@ -54,7 +52,7 @@ def get_retriever():
     return SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device="cpu")
 
 # ============================================================================
-# TOOL FUNCTIONS
+# TOOLS
 # ============================================================================
 def calculator(expression: str) -> str:
     try:
@@ -81,7 +79,6 @@ def convert_case(text: str, case_type: str) -> str:
 def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> str:
     factors = {"sedentary": 28, "light": 31, "moderate": 34, "active": 37}
     maintenance = weight_kg * factors.get(activity.lower(), 31)
-
     if goal.lower() == "lose":
         target = maintenance - 400
         goal_text = "weight loss"
@@ -101,9 +98,7 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
         f"- Protein: {protein_low:.1f}-{protein_high:.1f} g/day"
     )
 
-# ============================================================================
-# STRUCTURED TOOLS
-# ============================================================================
+# Structured Tools
 calculator_tool = StructuredTool.from_function(calculator, name="calculator", description="Evaluate a math expression.")
 get_current_time_tool = StructuredTool.from_function(get_current_time, name="get_current_time", description="Get current date/time.")
 word_count_tool = StructuredTool.from_function(word_count, name="word_count", description="Count words in text.")
@@ -135,10 +130,10 @@ def retrieve_pinecone_context(query: str, top_k: int = TOP_K) -> Dict[str, Any]:
 def context_string_from_matches(matches: List[dict]) -> str:
     parts: List[str] = []
     for m in matches:
-        meta = m.get("metadata", {}) or {}
-        passage = meta.get("text") or meta.get("passage_text") or ""
-        if passage:
-            parts.append(passage)
+        meta = m.get("metadata") or {}
+        text = meta.get("text") or meta.get("passage_text") or ""
+        if text:
+            parts.append(text)
     return "\n\n".join(parts)
 
 # ============================================================================
@@ -151,7 +146,7 @@ def _tool_executor(call: dict) -> ToolMessage:
     if isinstance(raw_args, str):
         try:
             args = json.loads(raw_args)
-        except Exception:
+        except:
             args = {}
     elif isinstance(raw_args, dict):
         args = raw_args
@@ -184,7 +179,7 @@ def _build_full_prompt_messages(inputs: dict) -> dict:
         SystemMessage(
             content=(
                 "You are a friendly, evidence-based personal trainer and RAG assistant. "
-                "Give safe, practical recommendations and explain reasoning.\n\n"
+                "Always give safe, practical recommendations and explain reasoning.\n\n"
                 "Tool rules:\n"
                 "- Use `calculator` for arithmetic\n"
                 "- Use `word_count` for word counting\n"
@@ -200,12 +195,8 @@ def _build_full_prompt_messages(inputs: dict) -> dict:
     if context:
         messages.append(HumanMessage(content=f"📚 Relevant context:\n{context}"))
 
-    # ✅ Return dict for LCEL
-    return {
-        "messages": messages,
-        "rag_context": context,
-        "original_user_message": user_message
-    }
+    # ✅ Return dict
+    return {"messages": messages, "rag_context": context, "original_user_message": user_message}
 
 # ============================================================================
 # MEMORY
@@ -213,7 +204,7 @@ def _build_full_prompt_messages(inputs: dict) -> dict:
 def _get_session_history(session_id: str):
     key = f"{SESSION_ID_KEY}_{session_id}"
     if key not in st.session_state:
-        st.session_state[key] = ChatMessageHistory()
+        st.session_state[key] = []
     return st.session_state[key]
 
 # ============================================================================
@@ -226,6 +217,7 @@ def initialize_chain():
 
     _setup_env()
     retriever = get_retriever()
+
     pinecone_key = os.getenv("PINECONE_API_KEY")
     pc = Pinecone(api_key=pinecone_key)
     index = pc.Index(INDEX_NAME)
@@ -233,8 +225,8 @@ def initialize_chain():
     llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
     llm_with_tools = llm.bind_tools(tools)
 
-    prompt_builder = RunnableLambda(_build_full_prompt_messages)
-    messages_extractor = RunnablePassthrough()
+    # Extract messages properly for LLM input
+    messages_extractor = RunnableLambda(lambda x: x["messages"])
 
     def _is_tool_call(response: AIMessage) -> bool:
         return getattr(response, "tool_calls", None) and len(response.tool_calls) > 0
@@ -244,10 +236,10 @@ def initialize_chain():
             _is_tool_call,
             RunnableMap({
                 "tool_results": RunnableLambda(lambda x: [_tool_executor(c) for c in x.tool_calls]),
-                "original_context": RunnablePassthrough(),
+                "original_context": RunnablePassthrough()
             })
             | RunnableMap({
-                "messages": lambda x: x["original_context"] + [x["original_context"]["llm_response"]] + x["tool_results"]
+                "messages": lambda x: x["original_context"]["messages"] + [x["original_context"]["llm_response"]] + x["tool_results"]
             })
             | RunnableMap({
                 "llm_response": llm,
@@ -260,23 +252,23 @@ def initialize_chain():
         })
     )
 
-    core_rag_chain = (
-        prompt_builder
+    core_chain = (
+        RunnableLambda(_build_full_prompt_messages)
         | RunnableMap({
             "llm_response": messages_extractor | llm_with_tools,
-            "messages": lambda x: x["llm_response"]
+            "messages": lambda x: x["messages"]
         })
         | tool_execution_loop
     )
 
     rag_agent_chain_with_history = RunnableWithMessageHistory(
-        core_rag_chain,
+        core_chain,
         _get_session_history,
         input_messages_key="user_message",
         output_messages_key="final_response",
         history_messages_key="chat_history",
         input_keys=["user_message"],
-        output_keys=["final_response"],
+        output_keys=["final_response"]
     )
 
     _initialized = True
