@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnableMap, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools.structured import StructuredTool
+from langchain.memory import ConversationBufferWindowMemory
 
 # ============================================================================
 # CONFIG
@@ -36,7 +37,7 @@ llm_with_tools = None
 rag_agent_chain_with_history = None
 
 # ============================================================================
-# ENVIRONMENT SETUP
+# ENVIRONMENT
 # ============================================================================
 def _setup_env():
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
@@ -195,7 +196,6 @@ def _build_full_prompt_messages(inputs: dict) -> dict:
     if context:
         messages.append(HumanMessage(content=f"📚 Relevant context:\n{context}"))
 
-    # ✅ Return dict
     return {"messages": messages, "rag_context": context, "original_user_message": user_message}
 
 # ============================================================================
@@ -204,7 +204,13 @@ def _build_full_prompt_messages(inputs: dict) -> dict:
 def _get_session_history(session_id: str):
     key = f"{SESSION_ID_KEY}_{session_id}"
     if key not in st.session_state:
-        st.session_state[key] = []
+        st.session_state[key] = ConversationBufferWindowMemory(
+            k=MEMORY_WINDOW_SIZE,
+            return_messages=True,
+            input_key="user_message",
+            output_key="final_response",
+            memory_key="chat_history"
+        )
     return st.session_state[key]
 
 # ============================================================================
@@ -225,7 +231,6 @@ def initialize_chain():
     llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
     llm_with_tools = llm.bind_tools(tools)
 
-    # Extract messages properly for LLM input
     messages_extractor = RunnableLambda(lambda x: x["messages"])
 
     def _is_tool_call(response: AIMessage) -> bool:
