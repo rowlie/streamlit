@@ -54,7 +54,7 @@ with st.sidebar:
 # Main title
 st.title("🤖 Welocome to Body Logic ")
 st.markdown(
-    "Ask questions about your Fitness Goals - I can use tools and retrieve relevant content from hand curated youtube videos."
+    "Ask questions about your Fitness Goals - I can use tools and conversational memory and retrieve relevant content from hand curated youtube videos."
 )
 
 # Initialize chain once
