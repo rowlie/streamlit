@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""RAG Chain with Tools - Streamlit-ready (LCEL + StructuredTool + Memory)"""
+"""RAG Chain with Tools - Fully working for Streamlit (LCEL + StructuredTool + Memory)"""
 
 import os
 import json
@@ -16,7 +16,6 @@ from langchain_core.runnables import RunnableLambda, RunnableBranch, RunnableMap
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.tools.structured import StructuredTool
 
-# ChatMessageHistory from langchain-community for Streamlit memory
 from langchain_community.chat_message_histories import ChatMessageHistory
 
 # ============================================================================
@@ -39,7 +38,7 @@ llm_with_tools = None
 rag_agent_chain_with_history = None
 
 # ============================================================================
-# ENVIRONMENT SETUP
+# ENVIRONMENT
 # ============================================================================
 def _setup_env():
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
@@ -52,16 +51,14 @@ def _setup_env():
 @st.cache_resource
 def get_retriever():
     import torch
-    model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device="cpu")
-    return model
+    return SentenceTransformer("sentence-transformers/all-mpnet-base-v2", device="cpu")
 
 # ============================================================================
-# TOOLS AS REGULAR FUNCTIONS
+# TOOL FUNCTIONS
 # ============================================================================
 def calculator(expression: str) -> str:
     try:
-        result = eval(expression)
-        return f"Result: {result}"
+        return f"Result: {eval(expression)}"
     except Exception as e:
         return f"Error: {e}"
 
@@ -107,31 +104,11 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
 # ============================================================================
 # STRUCTURED TOOLS
 # ============================================================================
-calculator_tool = StructuredTool.from_function(
-    func=calculator,
-    name="calculator",
-    description="Evaluate a math expression, e.g. '2 + 2 * 5'."
-)
-get_current_time_tool = StructuredTool.from_function(
-    func=get_current_time,
-    name="get_current_time",
-    description="Get the current date and time in YYYY-MM-DD HH:MM:SS format."
-)
-word_count_tool = StructuredTool.from_function(
-    func=word_count,
-    name="word_count",
-    description="Count the number of words in a given text."
-)
-convert_case_tool = StructuredTool.from_function(
-    func=convert_case,
-    name="convert_case",
-    description="Convert text to upper, lower, or title case."
-)
-estimate_targets_tool = StructuredTool.from_function(
-    func=estimate_targets,
-    name="estimate_targets",
-    description="Estimate daily calories and protein based on weight, sex, activity, and goal."
-)
+calculator_tool = StructuredTool.from_function(calculator, name="calculator", description="Evaluate a math expression.")
+get_current_time_tool = StructuredTool.from_function(get_current_time, name="get_current_time", description="Get current date/time.")
+word_count_tool = StructuredTool.from_function(word_count, name="word_count", description="Count words in text.")
+convert_case_tool = StructuredTool.from_function(convert_case, name="convert_case", description="Convert text to upper/lower/title case.")
+estimate_targets_tool = StructuredTool.from_function(estimate_targets, name="estimate_targets", description="Estimate calories/protein based on weight, sex, activity, goal.")
 
 tools = [
     calculator_tool,
@@ -142,7 +119,7 @@ tools = [
 ]
 
 # ============================================================================
-# PINECONE RAG RETRIEVAL
+# PINECONE RETRIEVAL
 # ============================================================================
 def retrieve_pinecone_context(query: str, top_k: int = TOP_K) -> Dict[str, Any]:
     global retriever, index
@@ -196,7 +173,7 @@ def _tool_executor(call: dict) -> ToolMessage:
 # ============================================================================
 # PROMPT BUILDER
 # ============================================================================
-def _build_full_prompt_messages(inputs: dict) -> List[Any]:
+def _build_full_prompt_messages(inputs: dict) -> dict:
     user_message = inputs["user_message"]
     history = inputs.get("chat_history", [])
 
@@ -222,7 +199,13 @@ def _build_full_prompt_messages(inputs: dict) -> List[Any]:
     messages.append(HumanMessage(content=user_message))
     if context:
         messages.append(HumanMessage(content=f"📚 Relevant context:\n{context}"))
-    return messages
+
+    # ✅ Return dict for LCEL
+    return {
+        "messages": messages,
+        "rag_context": context,
+        "original_user_message": user_message
+    }
 
 # ============================================================================
 # MEMORY
