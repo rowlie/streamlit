@@ -100,7 +100,48 @@ def convert_case(text: str, case_type: str) -> str:
     else:
         return f"Error: Unknown case type '{case_type}'. Use 'upper', 'lower', or 'title'."
 
-tools = [calculator, get_current_time, word_count, convert_case]
+@tool
+def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> str:
+    """
+    Estimate daily calories and protein for a user.
+    Args:
+        weight_kg: Body weight in kilograms.
+        sex: 'male' or 'female'.
+        activity: 'sedentary', 'light', 'moderate', 'active'.
+        goal: 'maintain', 'lose', 'gain'.
+    """
+    # Simple kcal-per-kg factors by activity level (approximate maintenance)
+    factor = {
+        "sedentary": 28,   # low movement
+        "light": 31,       # light exercise
+        "moderate": 34,    # 3–5 sessions/week
+        "active": 37       # hard training/manual work
+    }.get(activity, 31)
+
+    maintenance_cals = weight_kg * factor
+
+    if goal == "lose":
+        target_cals = maintenance_cals - 400
+        goal_text = "weight loss"
+    elif goal == "gain":
+        target_cals = maintenance_cals + 400
+        goal_text = "muscle gain"
+    else:
+        target_cals = maintenance_cals
+        goal_text = "weight maintenance"
+
+    # Protein: 1.6–2.2g/kg body weight for active lifters
+    protein_low = weight_kg * 1.6
+    protein_high = weight_kg * 2.2
+
+    return (
+        f"Estimated daily targets for {goal_text}:\n"
+        f"- Calories: {int(target_cals)} kcal per day\n"
+        f"- Protein: {protein_low:.1f}–{protein_high:.1f} g per day\n"
+        "These are simplified estimates and should be adjusted for age, body composition, and training volume."
+    )
+
+tools = [calculator, get_current_time, word_count, convert_case, estimate_targets]
 
 # ============================================================================
 # RAG RETRIEVAL
@@ -152,9 +193,10 @@ def _build_messages(inputs: dict) -> dict:
                 "(2) tailor suggestions to the user's level and goals; "
                 "(3) clearly explain reasoning in simple language.\n\n"
                 "Always use the retrieved knowledge base context when it is relevant. "
-                "If the user asks for calculations, word counts, case conversion, or the current time, "
-                "you MUST call the appropriate tool (`calculator`, `word_count`, `convert_case`, "
-                "`get_current_time`) and base your answer directly on that tool's output instead of estimating. "
+                "If the user asks for calculations, word counts, case conversion, the current time, "
+                "or calorie/protein targets, you MUST call the appropriate tool (`calculator`, `word_count`, "
+                "`convert_case`, `get_current_time`, `estimate_targets`) and base your answer directly on that "
+                "tool's output instead of estimating. "
                 "If you use a tool, explicitly mention in your explanation that you used that tool."
             )
         )
