@@ -118,5 +118,5 @@ if prompt := st.chat_input("Ask your question here..."):
 # Footer
 st.divider()
 st.caption(
-    "💡 Tip: This agent can use tools like calculator, time, word count, and case conversion."
+    "💡 Tip: This agent can use a calorie estimator, a current time tool, and has conversational memory."
 )
