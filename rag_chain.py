@@ -20,7 +20,9 @@ from langchain_core.runnables import (
     RunnablePassthrough,
 )
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain.memory import ConversationBufferWindowMemory
+
+# FIX: Import memory directly from the community package
+from langchain_community.memory import ConversationBufferWindowMemory 
 
 # ============================================================================
 # CONFIGURATION
@@ -50,6 +52,7 @@ tools = []
 
 def _setup_env():
     """Load environment variables - works in Colab and Streamlit"""
+    # Used for LangSmith tracing
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
     os.environ.setdefault("LANGCHAIN_PROJECT", "memory-and-tools-rag-agent-v3") 
@@ -61,7 +64,7 @@ def _setup_env():
 @st.cache_resource
 def get_retriever():
     """Load embedding model - cached for performance"""
-    # FIX RETAINED: Moving torch import inside this function for stability
+    # FIX: Moving torch import inside this function for stability
     import torch 
     
     print("📥 Loading SentenceTransformer model (768 dims)...")
