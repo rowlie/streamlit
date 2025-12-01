@@ -1,21 +1,27 @@
 # -*- coding: utf-8 -*-
-"""RAG Chain with Tools - Production ready for Streamlit deployment"""
+"""RAG Chain with Tools - Production ready for Streamlit deployment (LCEL Refactored)"""
 
 import os
 import json
 import torch
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Dict, List, Any
 
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
-from openai import OpenAI
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_core.tools import tool
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import (
+    RunnableLambda,
+    RunnableBranch,
+    RunnableMap,
+    RunnablePassthrough,
+)
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain.memory import ConversationBufferWindowMemory
 
 # ============================================================================
 # CONFIGURATION
@@ -23,6 +29,8 @@ from langchain_core.runnables import RunnableLambda
 
 INDEX_NAME = "youtube-qa-index"
 TOP_K = 5
+MEMORY_WINDOW_SIZE = 20
+SESSION_ID_KEY = "langchain_session" 
 
 # ============================================================================
 # GLOBAL STATE
@@ -34,15 +42,16 @@ pc = None
 index = None
 llm = None
 llm_with_tools = None
-rag_agent_chain = None
-memory = []  # Global conversation memory
+rag_agent_chain_with_history = None
+tools = [] 
 
 # ============================================================================
-# ENVIRONMENT SETUP (works with Streamlit secrets)
+# ENVIRONMENT SETUP
 # ============================================================================
 
 def _setup_env():
     """Load environment variables - works in Colab and Streamlit"""
+    # These are crucial for LangSmith tracing
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
     os.environ.setdefault("LANGCHAIN_PROJECT", "memory-and-tools-rag-agent")
@@ -55,17 +64,17 @@ def _setup_env():
 def get_retriever():
     """Load embedding model - cached for performance"""
     print("📥 Loading SentenceTransformer model (768 dims)...")
-    device = "cpu"  # Force CPU for Streamlit Cloud
+    device = "cpu"
     
     retriever = SentenceTransformer(
-        "sentence-transformers/all-mpnet-base-v2",  # 768 dims - MATCHES YOUR PINECONE INDEX
+        "sentence-transformers/all-mpnet-base-v2",
         device=device
     )
     print("✅ SentenceTransformer loaded (768 dims)")
     return retriever
 
 # ============================================================================
-# TOOLS
+# TOOLS (SAME AS BEFORE)
 # ============================================================================
 
 @tool
@@ -110,12 +119,11 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
         activity: 'sedentary', 'light', 'moderate', 'active'.
         goal: 'maintain', 'lose', 'gain'.
     """
-    # Simple kcal-per-kg factors by activity level (approximate maintenance)
     factor = {
-        "sedentary": 28,   # low movement
-        "light": 31,       # light exercise
-        "moderate": 34,    # 3–5 sessions/week
-        "active": 37       # hard training/manual work
+        "sedentary": 28,
+        "light": 31,
+        "moderate": 34,
+        "active": 37
     }.get(activity, 31)
 
     maintenance_cals = weight_kg * factor
@@ -130,7 +138,6 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
         target_cals = maintenance_cals
         goal_text = "weight maintenance"
 
-    # Protein: 1.6–2.2g/kg body weight for active lifters
     protein_low = weight_kg * 1.6
     protein_high = weight_kg * 2.2
 
@@ -143,8 +150,9 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
 
 tools = [calculator, get_current_time, word_count, convert_case, estimate_targets]
 
+
 # ============================================================================
-# RAG RETRIEVAL
+# RAG RETRIEVAL 
 # ============================================================================
 
 def retrieve_pinecone_context(query: str, top_k: int = TOP_K) -> Dict:
@@ -170,13 +178,48 @@ def context_string_from_matches(matches: List) -> str:
             parts.append(passage)
     return "\n\n".join(parts)
 
+
 # ============================================================================
-# CHAIN RUNNABLES
+# LCEL RUNNABLES 
 # ============================================================================
 
-def _build_messages(inputs: dict) -> dict:
-    """STEP 1: Build messages with RAG context"""
+def _tool_executor(call: dict) -> ToolMessage:
+    """Executes a single tool call requested by the LLM and returns the result."""
+    
+    # Extract tool name, args, and ID
+    tool_name = call.get("name") or call.get("function", {}).get("name")
+    raw_args = call.get("args") or call.get("function", {}).get("arguments", {})
+    tool_id = call.get("id", "tool_call")
+
+    if isinstance(raw_args, str):
+        try:
+            tool_args = json.loads(raw_args)
+        except Exception:
+            tool_args = {}
+    else:
+        tool_args = raw_args or {}
+
+    matching = [t for t in tools if t.name == tool_name]
+    if not matching:
+        result_text = f"Tool '{tool_name}' not found."
+    else:
+        try:
+            # Invoke the tool (the actual function runs here)
+            result_text = matching[0].invoke(tool_args)
+        except Exception as e:
+            result_text = f"Error in tool '{tool_name}': {e}"
+            
+    return ToolMessage(content=str(result_text), tool_call_id=tool_id)
+
+
+def _build_full_prompt_messages(inputs: dict) -> dict:
+    """
+    STEP 1: Combines history, RAG context, and the current user message 
+    into a complete list of messages for the LLM.
+    """
     user_message = inputs["user_message"]
+    # chat_history is injected by RunnableWithMessageHistory
+    history = inputs.get("chat_history", []) 
     
     # RAG: retrieve context from Pinecone
     pinecone_result = retrieve_pinecone_context(user_message)
@@ -184,39 +227,36 @@ def _build_messages(inputs: dict) -> dict:
     
     messages = []
 
-    # System prompt – personality + strict tool usage rules
+    # 1. System Prompt
     messages.append(
-    SystemMessage(
-        content=(
-            "You are a friendly, evidence-based personal trainer and RAG assistant. "
-            "Your goals are to: (1) give safe, practical fitness advice; "
-            "(2) tailor suggestions to the user's level and goals; "
-            "(3) clearly explain reasoning in simple language.\n\n"
-            "Always use the retrieved knowledge base context when it is relevant.\n\n"
-            "Tool usage rules:\n"
-            "- If the user asks for general arithmetic or numeric computations (e.g. 75 * 22, percentages), "
-            "you MUST call the `calculator` tool.\n"
-            "- If the user asks for word counts, you MUST call the `word_count` tool.\n"
-            "- If the user asks for case conversion, you MUST call the `convert_case` tool.\n"
-            "- If the user asks for the current time or date, you MUST call the `get_current_time` tool.\n"
-            "- If the user asks for calorie or protein targets, daily macro targets, or bodyweight-based "
-            "nutrition targets (e.g. 'I am 75 kg, moderate activity, want to lose weight – what should my "
-            "calories and protein be?'), you MUST call ONLY the `estimate_targets` tool and NOT the "
-            "`calculator` tool.\n\n"
-            "When you use any tool, explicitly mention in your explanation that you used that tool, and base "
-            "your answer directly on the tool's output instead of estimating."
+        SystemMessage(
+            content=(
+                "You are a friendly, evidence-based personal trainer and RAG assistant. "
+                "Your goals are to: (1) give safe, practical fitness advice; "
+                "(2) tailor suggestions to the user's level and goals; "
+                "(3) clearly explain reasoning in simple language.\n\n"
+                "Always use the retrieved knowledge base context when it is relevant.\n\n"
+                "Tool usage rules:\n"
+                "- If the user asks for general arithmetic or numeric computations (e.g. 75 * 22, percentages), "
+                "you MUST call the `calculator` tool.\n"
+                "- If the user asks for word counts, you MUST call the `word_count` tool.\n"
+                "- If the user asks for case conversion, you MUST call the `convert_case` tool.\n"
+                "- If the user asks for the current time or date, you MUST call the `get_current_time` tool.\n"
+                "- If the user asks for calorie or protein targets, daily macro targets, or bodyweight-based "
+                "nutrition targets, you MUST call ONLY the `estimate_targets` tool and NOT the `calculator` tool.\n\n"
+                "When you use any tool, explicitly mention in your explanation that you used that tool, and base "
+                "your answer directly on the tool's output instead of estimating."
+            )
         )
     )
-)
 
-
-    # Then previous conversation
-    messages.extend(memory)
+    # 2. Conversation History
+    messages.extend(history)
     
-    # Current user message
+    # 3. Current User Message
     messages.append(HumanMessage(content=user_message))
     
-    # Optional RAG context message
+    # 4. Optional RAG Context Message 
     if context:
         messages.append(
             HumanMessage(
@@ -227,111 +267,50 @@ def _build_messages(inputs: dict) -> dict:
     return {
         "messages": messages,
         "rag_context": context,
+        "original_user_message": user_message 
     }
 
-def _first_llm_call(state: dict) -> dict:
-    """STEP 2: Call LLM with tools enabled (decision step)"""
-    messages = state["messages"]
-    first_response = llm_with_tools.invoke(messages)
-    
-    return {
-        **state,
-        "first_response": first_response,
-    }
+# ============================================================================
+# MEMORY INTEGRATION
+# ============================================================================
 
-def _run_tools_if_needed(state: dict) -> dict:
-    """STEP 3: Execute tools if LLM requested them"""
-    first_response = state["first_response"]
-    messages = state["messages"]
-    
-    # Extract tool calls
-    tool_calls = getattr(first_response, "tool_calls", None)
-    if not tool_calls and hasattr(first_response, "additional_kwargs"):
-        tool_calls = first_response.additional_kwargs.get("tool_calls")
-    
-    # If no tool calls, propagate state forward
-    if not tool_calls:
-        return {
-            **state,
-            "messages_with_tools": messages,
-        }
-    
-    # Execute tools
-    tool_results_messages = []
-    for call in tool_calls:
-        tool_name = call.get("name") or call.get("function", {}).get("name")
-        raw_args = (
-            call.get("args")
-            or call.get("arguments")
-            or call.get("function", {}).get("arguments", {})
+def _get_session_history(session_id: str) -> ConversationBufferWindowMemory:
+    """Retrieve or create a memory object isolated by Streamlit session."""
+    session_key = f"{SESSION_ID_KEY}_{session_id}" 
+    if session_key not in st.session_state:
+        # LangChain Memory component (multi-user safe via st.session_state)
+        st.session_state[session_key] = ConversationBufferWindowMemory(
+            k=MEMORY_WINDOW_SIZE,
+            return_messages=True,
+            input_key="user_message",    
+            output_key="final_response", 
+            memory_key="chat_history"    
         )
-        
-        # Parse args if JSON string
-        if isinstance(raw_args, str):
-            try:
-                tool_args = json.loads(raw_args)
-            except Exception:
-                tool_args = {}
-        else:
-            tool_args = raw_args or {}
-        
-        tool_id = call.get("id", "tool_call")
-        
-        # Find matching tool
-        matching = [t for t in tools if t.name == tool_name]
-        if not matching:
-            result_text = f"Tool '{tool_name}' not found."
-        else:
-            try:
-                result_text = matching[0].invoke(tool_args)
-            except Exception as e:
-                result_text = f"Error in tool '{tool_name}': {e}"
-        
-        tool_results_messages.append(
-            ToolMessage(content=str(result_text), tool_call_id=tool_id)
-        )
-    
-    # Build new message list with tools results
-    messages_with_tools = messages + [first_response] + tool_results_messages
-    
-    return {
-        **state,
-        "messages_with_tools": messages_with_tools,
-    }
+    return st.session_state[session_key]
 
-def _final_llm_call(state: dict) -> dict:
-    """STEP 4: Call plain LLM for final answer"""
-    messages_with_tools = state["messages_with_tools"]
-    final_response = llm.invoke(messages_with_tools)
-    
-    return {
-        "final_response": final_response,
-        "rag_context": state.get("rag_context", ""),
-    }
 
 # ============================================================================
 # INITIALIZATION
 # ============================================================================
 
 def initialize_chain():
-    """Initialize all components - call once at startup"""
-    global _initialized, retriever, pc, index, llm, llm_with_tools, rag_agent_chain
+    """Initialize all components and build the final chain with LCEL."""
+    global _initialized, retriever, pc, index, llm, llm_with_tools, rag_agent_chain_with_history
     
     if _initialized:
         return
     
     _setup_env()
-    
     print("🔧 Initializing RAG chain...")
     
-    # Get cached retriever (768 dims - matches your Pinecone index)
     retriever = get_retriever()
     
     # Pinecone
     pinecone_key = os.getenv("PINECONE_API_KEY")
     if not pinecone_key:
-        raise ValueError("PINECONE_API_KEY not set")
-    
+        # In a real app, you might fall back to a dummy index or stop, but since you confirmed setup, this is fine.
+        print("⚠️ PINECONE_API_KEY not set. RAG will likely fail.") 
+
     pc = Pinecone(api_key=pinecone_key)
     index = pc.Index(INDEX_NAME)
     print(f"✅ Connected to Pinecone index: {INDEX_NAME} (768 dims)")
@@ -341,20 +320,73 @@ def initialize_chain():
     llm_with_tools = llm.bind_tools(tools)
     print(f"✅ Loaded {len(tools)} tools and LLM")
     
-    # Build chain
-    build_messages = RunnableLambda(_build_messages)
-    first_llm_call = RunnableLambda(_first_llm_call)
-    run_tools_if_needed = RunnableLambda(_run_tools_if_needed)
-    final_llm_call = RunnableLambda(_final_llm_call)
+    # --- BUILD THE LCEL CHAIN ---
     
-    rag_agent_chain = (
-        RunnableLambda(lambda user_message: {"user_message": user_message})
-        | build_messages
-        | first_llm_call
-        | run_tools_if_needed
-        | final_llm_call
+    prompt_builder = RunnableLambda(_build_full_prompt_messages)
+
+    messages_extractor = RunnablePassthrough.assign(
+        messages=lambda x: x["messages"]
     )
-    print("✅ RAG chain initialized and ready")
+    
+    def _is_tool_call(response: AIMessage) -> bool:
+        """Check if the LLM response is a tool call."""
+        return response.tool_calls is not None and len(response.tool_calls) > 0
+
+    tool_execution_loop = RunnableBranch(
+        # CONDITION: If the LLM output is a tool call
+        (_is_tool_call,
+            # SEQUENCE A: Tool Execution -> Second LLM Call
+            RunnableMap({
+                # Execute tool, returning a ToolMessage object
+                "tool_results": RunnableLambda(lambda x: [
+                    _tool_executor(call) for call in x.tool_calls
+                ]),
+                "original_context": RunnablePassthrough()
+            })
+            | RunnableMap({
+                # Re-build the message list for the second LLM call
+                "messages": lambda x: (
+                    x["original_context"]["messages"] + 
+                    [x["original_context"]["llm_response"]] + 
+                    x["tool_results"]
+                )
+            })
+            | RunnableMap({
+                "llm_response": llm, # Second LLM call (final answer)
+                "final_response": lambda x: x["llm_response"]
+            })
+        ),
+        # DEFAULT/ELSE: No tool call, the first LLM response is the final answer
+        RunnableMap({
+            # The initial LLM response is the final answer object
+            "llm_response": RunnablePassthrough(), 
+            "final_response": lambda x: x["llm_response"]
+        })
+    )
+    
+    # 3. Main LCEL Chain (The core logic)
+    core_rag_chain = (
+        prompt_builder  
+        | RunnableMap({
+            # Call LLM with tools bound
+            "llm_response": messages_extractor | llm_with_tools, 
+            "messages": lambda x: x["messages"] 
+        })
+        | tool_execution_loop 
+    )
+
+    # 4. Wrap the core chain with history management
+    rag_agent_chain_with_history = RunnableWithMessageHistory(
+        core_rag_chain,
+        _get_session_history,
+        input_messages_key="user_message",
+        output_messages_key="final_response",
+        history_messages_key="chat_history",
+        input_keys=["user_message"], 
+        output_keys=["final_response"]
+    )
+    
+    print("✅ RAG chain initialized and ready (LCEL + Memory)")
     
     _initialized = True
 
@@ -363,24 +395,20 @@ def initialize_chain():
 # ============================================================================
 
 def chat_with_rag_and_tools(user_message: str) -> str:
-    """Main chat function - call this with user input"""
-    global memory
-    
+    """
+    Main chat function - invokes the chain wrapped with history.
+    """
     if not _initialized:
         raise RuntimeError("Chain not initialized. Call initialize_chain() first.")
     
     try:
-        result = rag_agent_chain.invoke(user_message)
-        final_response = result["final_response"]
-        response_text = final_response.content
+        # The chain handles RAG, tool calling, and memory update automatically
+        result = rag_agent_chain_with_history.invoke(
+            {"user_message": user_message},
+            config={"configurable": {"session_id": "streamlit_user"}} 
+        )
         
-        # Update memory
-        memory.append(HumanMessage(content=user_message))
-        memory.append(AIMessage(content=response_text))
-        
-        # Keep memory from getting too long (last 20 messages)
-        if len(memory) > 20:
-            memory = memory[-20:]
+        response_text = result["final_response"].content
         
         return response_text
     except Exception as e:
