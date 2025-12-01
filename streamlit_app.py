@@ -1,8 +1,7 @@
 import streamlit as st
 import os
-from datetime import datetime
 
-# Import your fully working RAG chain
+# Import your updated RAG chain
 from rag_chain import initialize_chain, chat_with_rag_and_tools, SESSION_ID_KEY
 
 # ----------------------------
@@ -113,8 +112,6 @@ if prompt := st.chat_input("Ask your question here..."):
             with st.spinner("Thinking..."):
                 response = chat_with_rag_and_tools(prompt)
                 placeholder.markdown(response)
-
-                # Add assistant response to session
                 st.session_state.messages.append({"role": "assistant", "content": response})
         except Exception as e:
             error_msg = f"❌ Error: {str(e)}"
