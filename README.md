@@ -5,7 +5,7 @@ BodyLogic is a Streamlit app that delivers evidence-based fitness guidance using
 ## Features
 
 - RAG on curated YouTube content using Pinecone (768-dim embeddings via all-mpnet-base-v2). 
-- Tool-aware agent: calorie/protein estimator with strict usage rules. [file:1]
+- Tool-aware agent: calorie/protein estimator with strict usage rules. 
 - Conversational memory: sliding window of the last 20 messages to preserve context. 
 - Streamlit UI with demo prompts and LangSmith tracing enabled for observability. 
 
