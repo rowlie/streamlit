@@ -112,10 +112,10 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
     """
     # Simple kcal-per-kg factors by activity level (approximate maintenance)
     factor = {
-        "sedentary": 28,   # low movement
-        "light": 31,       # light exercise
-        "moderate": 34,    # 3–5 sessions/week
-        "active": 37       # hard training/manual work
+        "sedentary": 28,    # low movement
+        "light": 31,        # light exercise
+        "moderate": 34,     # 3–5 sessions/week
+        "active": 37        # hard training/manual work
     }.get(activity, 31)
 
     maintenance_cals = weight_kg * factor
@@ -144,7 +144,7 @@ def estimate_targets(weight_kg: float, sex: str, activity: str, goal: str) -> st
 tools = [calculator, get_current_time, word_count, convert_case, estimate_targets]
 
 # ============================================================================
-# RAG RETRIEVAL
+# RAG RETRIEVAL (UNCHANGED)
 # ============================================================================
 
 def retrieve_pinecone_context(query: str, top_k: int = TOP_K) -> Dict:
@@ -170,17 +170,39 @@ def context_string_from_matches(matches: List) -> str:
             parts.append(passage)
     return "\n\n".join(parts)
 
-# ============================================================================
-# CHAIN RUNNABLES
-# ============================================================================
-
-def _build_messages(inputs: dict) -> dict:
-    """STEP 1: Build messages with RAG context"""
+# --- NEW STEP: DEDICATED RETRIEVAL RUNNABLE ---
+def _retrieve_and_format_context(inputs: dict) -> dict:
+    """
+    Retrieves Pinecone context and packages it for the next step.
+    This function will show up as the dedicated 'Retriever' step in LangSmith.
+    Input: {'user_message': '...'}
+    Output: {'user_message': '...', 'context': '...'}
+    """
     user_message = inputs["user_message"]
     
     # RAG: retrieve context from Pinecone
     pinecone_result = retrieve_pinecone_context(user_message)
     context = context_string_from_matches(pinecone_result.get("matches", []))
+    
+    # LangSmith will display the 'context' as the output of this step.
+    return {
+        "user_message": user_message, 
+        "context": context,
+    }
+
+# ============================================================================
+# CHAIN RUNNABLES (MODIFIED)
+# ============================================================================
+
+def _build_messages_with_context(inputs: dict) -> dict:
+    """
+    STEP 2: Build messages with RAG context received from the previous step.
+    This replaces your original _build_messages function.
+    """
+    
+    # 🚨 Context is now retrieved from the inputs dictionary
+    user_message = inputs["user_message"]
+    context = inputs["context"]
     
     messages = []
 
@@ -209,7 +231,6 @@ def _build_messages(inputs: dict) -> dict:
     )
 )
 
-
     # Then previous conversation
     messages.extend(memory)
     
@@ -230,7 +251,7 @@ def _build_messages(inputs: dict) -> dict:
     }
 
 def _first_llm_call(state: dict) -> dict:
-    """STEP 2: Call LLM with tools enabled (decision step)"""
+    """STEP 3: Call LLM with tools enabled (decision step)"""
     messages = state["messages"]
     first_response = llm_with_tools.invoke(messages)
     
@@ -240,7 +261,7 @@ def _first_llm_call(state: dict) -> dict:
     }
 
 def _run_tools_if_needed(state: dict) -> dict:
-    """STEP 3: Execute tools if LLM requested them"""
+    """STEP 4: Execute tools if LLM requested them"""
     first_response = state["first_response"]
     messages = state["messages"]
     
@@ -300,7 +321,7 @@ def _run_tools_if_needed(state: dict) -> dict:
     }
 
 def _final_llm_call(state: dict) -> dict:
-    """STEP 4: Call plain LLM for final answer"""
+    """STEP 5: Call plain LLM for final answer"""
     messages_with_tools = state["messages_with_tools"]
     final_response = llm.invoke(messages_with_tools)
     
@@ -310,7 +331,7 @@ def _final_llm_call(state: dict) -> dict:
     }
 
 # ============================================================================
-# INITIALIZATION
+# INITIALIZATION (MODIFIED)
 # ============================================================================
 
 def initialize_chain():
@@ -341,25 +362,36 @@ def initialize_chain():
     llm_with_tools = llm.bind_tools(tools)
     print(f"✅ Loaded {len(tools)} tools and LLM")
     
-    # Build chain
-    build_messages = RunnableLambda(_build_messages)
+    # --- BUILD CHAIN WITH NEW STEPS ---
+    
+    # 1. New dedicated retrieval step
+    pinecone_retrieval_step = RunnableLambda(_retrieve_and_format_context).with_config(
+        tags=["Retriever", "Pinecone"] # Tags help LangSmith correctly display the component
+    )
+
+    # 2. Updated message builder
+    build_messages = RunnableLambda(_build_messages_with_context) 
+
+    # 3. Existing steps
     first_llm_call = RunnableLambda(_first_llm_call)
     run_tools_if_needed = RunnableLambda(_run_tools_if_needed)
     final_llm_call = RunnableLambda(_final_llm_call)
     
+    # Re-pipe the sequence: Input -> Retriever -> Build Messages -> LLM -> Tools -> Final LLM
     rag_agent_chain = (
         RunnableLambda(lambda user_message: {"user_message": user_message})
-        | build_messages
+        | pinecone_retrieval_step # <--- Explicit retrieval is now here
+        | build_messages          # <--- Builds the prompt using retrieved context
         | first_llm_call
         | run_tools_if_needed
         | final_llm_call
     )
-    print("✅ RAG chain initialized and ready")
+    print("✅ RAG chain initialized with separate retrieval step and ready")
     
     _initialized = True
 
 # ============================================================================
-# MAIN CHAT FUNCTION
+# MAIN CHAT FUNCTION (UNCHANGED)
 # ============================================================================
 
 def chat_with_rag_and_tools(user_message: str) -> str:
