@@ -1,4 +1,4 @@
-# BodyLogic — RAG Agent with Tools and Memory
+# V1 BodyLogic — RAG Agent with Tools and Memory
 
 BodyLogic is a Streamlit app that delivers evidence-based fitness guidance using a Retrieval-Augmented Generation (RAG) pipeline, tool-calling, and lightweight conversational memory. It indexes curated YouTube transcripts into Pinecone with all-mpnet-base-v2 embeddings, then answers user questions with OpenAI's GPT via LangChain Runnables. 
 
@@ -29,6 +29,10 @@ BodyLogic is a Streamlit app that delivers evidence-based fitness guidance using
 
 - Python 3.10+
 - Recommended packages: `streamlit`, `langchain`, `langchain-openai`, `langchain-core`, `langchain-text-splitters`, `sentence-transformers`, `pinecone-client`, `youtube-transcript-api`, `huggingface-hub`, `langchain-huggingface`, `tqdm`, `python-dotenv`.
+
+## Environment Variables
+
+Set via Streamlit secrets
 
 
 ## V2 Documentation for the V2 BodyLogic.py file
@@ -116,7 +120,5 @@ Ask “What’s the current time?” or “How many words are in: …” to exer
 
 Type exit or quit to end the session.
 
-## Environment Variables
 
-Set via Streamlit secrets
 
