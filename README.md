@@ -95,7 +95,7 @@ get_current_time: Returns the current date and time string (input ignored).
 
 word_count: Returns the word count for arbitrary text.
 
-## training_plan: Generates a simple weekly training split from natural language preferences (days per week, level, equipment).​
+training_plan: Generates a simple weekly training split from natural language preferences (days per week, level, equipment).​
 
 The system prompt also instructs the assistant when each tool should be preferred for specific query types.​
 
