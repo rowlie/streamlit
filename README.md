@@ -96,6 +96,10 @@ RAG: rag_search_func queries the Pinecone index, pulls text or passage_text from
 
 Agent: initialize_agent wires the tools, ChatOpenAI model, and ConversationBufferWindowMemory into a ZERO_SHOT_REACT_DESCRIPTION agent that selects tools based on their descriptions.​
 
+## Memory
+
+The agent maintains conversational context using LangChain's ConversationBufferWindowMemory, which stores the last 5 messages ($k=5$) in the chat_history to give the LLM short-term recall. This ensures the agent remembers recent turns for relevant follow-up questions while preventing the prompt from becoming too long
+
 ## Tools exposed to the agent
 rag_search: Looks up information in the YouTube QA knowledge base using Pinecone.​
 
